@@ -67,18 +67,101 @@ namespace FileCompare
 
         private void btnCopyFromLeft_Click(object sender, EventArgs e)
         {
+            string leftPath = txtLeftDir.Text;
+            string rightPath = txtRightDir.Text;
+
+            if (!Directory.Exists(leftPath) || !Directory.Exists(rightPath))
+            {
+                MessageBox.Show("양쪽 폴더가 모두 선택되어 있어야 복사할 수 있습니다.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                // 왼쪽(Left) 폴더 전체를 오른쪽(Right)으로 복사
+                CopyDirectory(leftPath, rightPath);
+
+             
+
+                // 복사가 완료되면 결과를 바로 양측에 반영
+                UpdateAndCompareListViews();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("복사 중 오류 발생: " + ex.Message, "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void btnCopyFromRight_Click(object sender, EventArgs e)
         {
+            string leftPath = txtLeftDir.Text;
+            string rightPath = txtRightDir.Text;
+
+            if (!Directory.Exists(leftPath) || !Directory.Exists(rightPath))
+            {
+                MessageBox.Show("양쪽 폴더가 모두 선택되어 있어야 복사할 수 있습니다.", "알림", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                // 오른쪽(Right) 폴더 전체를 왼쪽(Left)으로 복사
+                CopyDirectory(rightPath, leftPath);
+
+                // 복사가 완료되면 결과를 바로 양측에 반영
+                UpdateAndCompareListViews();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("복사 중 오류 발생: " + ex.Message, "오류", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
-        private void lvwLeftDir_SelectedIndexChanged(object sender, EventArgs e)
+        // ▼ 폴더와 그 내부의 모든 파일, 하위 폴더들을 재귀적으로 복사하는 헬퍼 메서드
+        private void CopyDirectory(string sourceDir, string destinationDir)
         {
-        }
+            var dir = new DirectoryInfo(sourceDir);
+            if (!dir.Exists) return;
 
-        private void lvwRightDir_SelectedIndexChanged(object sender, EventArgs e)
-        {
+            // 목적지 폴더가 없다면 생성
+            Directory.CreateDirectory(destinationDir);
+
+            // 1. 현재 폴더 안의 모든 파일을 복사 (덮어쓰기 허용)
+            foreach (FileInfo file in dir.GetFiles())
+            {
+                string targetFilePath = Path.Combine(destinationDir, file.Name);
+
+                // 원본 파일이 복사될 대상 쪽에 이미 존재하는 경우 날짜 비교
+                if (File.Exists(targetFilePath))
+                {
+                    FileInfo targetFile = new FileInfo(targetFilePath);
+
+                    // 복사할 원본 파일이 대상 파일보다 시간상 더 오래된(과거의) 파일인 경우
+                    if (file.LastWriteTime < targetFile.LastWriteTime)
+                    {
+                        DialogResult result = MessageBox.Show(
+                            $"원본 파일 '{file.Name}' 은(는) 대상 폴더의 파일보다 오래된 파일입니다.\n정말 최신 파일을 덮어쓰고 복사하시겠습니까?",
+                            "복사 확인",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Warning);
+
+                        // 사용자가 No를 클릭하면 이 파일은 건너뛰기
+                        if (result == DialogResult.No)
+                        {
+                            continue;
+                        }
+                    }
+                }
+
+                file.CopyTo(targetFilePath, true);
+            }
+
+            // 2. 하위 폴더들을 다시 재귀적으로 복사
+            foreach (DirectoryInfo subDir in dir.GetDirectories())
+            {
+                string newDestinationDir = Path.Combine(destinationDir, subDir.Name);
+                CopyDirectory(subDir.FullName, newDestinationDir);
+            }
         }
 
         // ▼ 양쪽 폴더를 동시에 읽고 비교 기준에 맞춰 색상을 바로 칠해주는 통합 메서드
@@ -188,6 +271,16 @@ namespace FileCompare
         private string FormatSizeInKb(long bytes)
         {
             return (bytes / 1024.0).ToString("N0") + " KB";
+        }
+
+        private void lvwLeftDir_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            // 왼쪽 리스트 뷰 선택 시 동작
+        }
+
+        private void lvwRightDir_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            // 오른쪽 리스트 뷰 선택 시 동작
         }
     }
 }
