@@ -202,8 +202,32 @@ namespace FileCompare
             var dir = new DirectoryInfo(sourceDir);
             if (!dir.Exists) return;
 
-            // 목적지 폴더가 없다면 생성
-            Directory.CreateDirectory(destinationDir);
+            // 대상 폴더가 이미 존재하는 경우 날짜 비교
+            if (Directory.Exists(destinationDir))
+            {
+                var targetDirInfo = new DirectoryInfo(destinationDir);
+
+                // 복사할 원본 폴더가 대상 쪽 폴더보다 시간상 더 오래된(과거의) 경우
+                if (dir.LastWriteTime < targetDirInfo.LastWriteTime)
+                {
+                    DialogResult result = MessageBox.Show(
+                        $"원본 폴더 '{dir.Name}' 은(는) 대상 쪽의 폴더보다 오래된 폴더입니다.\n정말 이 폴더 내용을 덮어쓰고 복사하시겠습니까?",
+                        "복사 확인",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+
+                    // 사용자가 No를 클릭하면 이 폴더 안의 내용 전체 건너뛰기
+                    if (result == DialogResult.No)
+                    {
+                        return;
+                    }
+                }
+            }
+            else
+            {
+                // 목적지 폴더가 없다면 생성
+                Directory.CreateDirectory(destinationDir);
+            }
 
             // 1. 현재 폴더 안의 모든 파일을 복사 (각 파일별로 공통 로직 사용)
             foreach (FileInfo file in dir.GetFiles())
@@ -236,99 +260,110 @@ namespace FileCompare
 
             try
             {
-                // Key를 전체 경로 대신 기준 폴더로부터의 상대 경로(Relative Path)로 설정하여 비교합니다.
                 var leftFiles = new Dictionary<string, FileInfo>(StringComparer.OrdinalIgnoreCase);
                 var rightFiles = new Dictionary<string, FileInfo>(StringComparer.OrdinalIgnoreCase);
+                var leftDirs = new Dictionary<string, DirectoryInfo>(StringComparer.OrdinalIgnoreCase);
+                var rightDirs = new Dictionary<string, DirectoryInfo>(StringComparer.OrdinalIgnoreCase);
 
-                // 1. 디렉터리 표시 및 왼쪽 파일 정보 수집 (모든 하위 디렉터리 포함 SearchOption.AllDirectories)
+                // 1. 왼쪽 정보 수집 (현재 폴더 깊이에서만: 1-Depth)
                 if (hasLeft)
                 {
-                    // 최상위 디렉터리만 (<DIR>) 폴더 정보로 먼저 띄워줍니다. (보기 편하게)
-                    foreach (var d in Directory.EnumerateDirectories(leftPath).Select(p => new DirectoryInfo(p)).OrderBy(d => d.Name))
+                    leftDirs = new DirectoryInfo(leftPath).GetDirectories().ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
+                    leftFiles = new DirectoryInfo(leftPath).GetFiles().ToDictionary(f => f.Name, StringComparer.OrdinalIgnoreCase);
+                }
+
+                // 2. 오른쪽 정보 수집 (현재 폴더 깊이에서만: 1-Depth)
+                if (hasRight)
+                {
+                    rightDirs = new DirectoryInfo(rightPath).GetDirectories().ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
+                    rightFiles = new DirectoryInfo(rightPath).GetFiles().ToDictionary(f => f.Name, StringComparer.OrdinalIgnoreCase);
+                }
+
+                // 3. 왼쪽 리스트 뷰 채우기 + 색상 결정
+                if (hasLeft)
+                {
+                    // 최상위 그룹 1: 폴더 항목을 하나의 묶음(<DIR>)처럼 표시
+                    foreach (var ld in leftDirs.Values.OrderBy(d => d.Name))
                     {
-                        var item = new ListViewItem(d.Name);
+                        var item = new ListViewItem(ld.Name);
                         item.SubItems.Add("<DIR>");
-                        item.SubItems.Add(d.LastWriteTime.ToString("g"));
+                        item.SubItems.Add(ld.LastWriteTime.ToString("g"));
+
+                        if (hasRight && rightDirs.TryGetValue(ld.Name, out var rd))
+                        {
+                            if (ld.LastWriteTime == rd.LastWriteTime) item.ForeColor = Color.Black;        // 1단계: 동일 (검은색)
+                            else if (ld.LastWriteTime > rd.LastWriteTime) item.ForeColor = Color.Red;      // 2단계: 최신 폴더 (빨간색)
+                            else item.ForeColor = Color.Gray;                                              // 2단계: 과거 폴더 (회색)
+                        }
+                        else
+                        {
+                            item.ForeColor = hasRight ? Color.Purple : Color.Black;                        // 3단계: 단독 폴더 (보라색)
+                        }
                         lvwLeftDir.Items.Add(item);
                     }
-                    
-                    // 하위 폴더들의 파일까지 전부 불러와서 Name 부분에는 상대경로로 저장합니다.
-                    var allFiles = new DirectoryInfo(leftPath).GetFiles("*", SearchOption.AllDirectories);
-                    foreach (var f in allFiles)
+
+                    // 최상위 그룹 2: 일반 파일 항목 표시
+                    foreach (var lf in leftFiles.Values.OrderBy(f => f.Name))
                     {
-                        string relativePath = Path.GetRelativePath(leftPath, f.FullName);
-                        leftFiles[relativePath] = f;
+                        var item = new ListViewItem(lf.Name);
+                        item.SubItems.Add(FormatSizeInKb(lf.Length));
+                        item.SubItems.Add(lf.LastWriteTime.ToString("g"));
+
+                        if (hasRight && rightFiles.TryGetValue(lf.Name, out var rf))
+                        {
+                            if (lf.LastWriteTime == rf.LastWriteTime) item.ForeColor = Color.Black;
+                            else if (lf.LastWriteTime > rf.LastWriteTime) item.ForeColor = Color.Red;
+                            else item.ForeColor = Color.Gray;
+                        }
+                        else
+                        {
+                            item.ForeColor = hasRight ? Color.Purple : Color.Black;
+                        }
+                        lvwLeftDir.Items.Add(item);
                     }
                 }
 
-                // 2. 디렉터리 표시 및 오른쪽 파일 정보 수집 (모든 하위 디렉터리 포함)
+                // 4. 오른쪽 리스트 뷰 채우기 + 색상 결정
                 if (hasRight)
                 {
-                    foreach (var d in Directory.EnumerateDirectories(rightPath).Select(p => new DirectoryInfo(p)).OrderBy(d => d.Name))
+                    // 최상위 그룹 1: 폴더 항목을 하나의 묶음(<DIR>)처럼 표시
+                    foreach (var rd in rightDirs.Values.OrderBy(d => d.Name))
                     {
-                        var item = new ListViewItem(d.Name);
+                        var item = new ListViewItem(rd.Name);
                         item.SubItems.Add("<DIR>");
-                        item.SubItems.Add(d.LastWriteTime.ToString("g"));
+                        item.SubItems.Add(rd.LastWriteTime.ToString("g"));
+
+                        if (hasLeft && leftDirs.TryGetValue(rd.Name, out var ld))
+                        {
+                            if (rd.LastWriteTime == ld.LastWriteTime) item.ForeColor = Color.Black;
+                            else if (rd.LastWriteTime > ld.LastWriteTime) item.ForeColor = Color.Red;
+                            else item.ForeColor = Color.Gray;
+                        }
+                        else
+                        {
+                            item.ForeColor = hasLeft ? Color.Purple : Color.Black;
+                        }
                         lvwRightDir.Items.Add(item);
                     }
-                    
-                    var allFiles = new DirectoryInfo(rightPath).GetFiles("*", SearchOption.AllDirectories);
-                    foreach (var f in allFiles)
+
+                    // 최상위 그룹 2: 일반 파일 항목 표시
+                    foreach (var rf in rightFiles.Values.OrderBy(f => f.Name))
                     {
-                        string relativePath = Path.GetRelativePath(rightPath, f.FullName);
-                        rightFiles[relativePath] = f;
-                    }
-                }
+                        var item = new ListViewItem(rf.Name);
+                        item.SubItems.Add(FormatSizeInKb(rf.Length));
+                        item.SubItems.Add(rf.LastWriteTime.ToString("g"));
 
-                // 3. 왼쪽 파일 목록 채우기 + 색상 결정
-                if (hasLeft)
-                {
-                    foreach (var kvp in leftFiles.OrderBy(f => f.Key))
-                    {
-                        string relPath = kvp.Key;
-                        FileInfo lf = kvp.Value;
-
-                        var litem = new ListViewItem(relPath);
-                        litem.SubItems.Add(FormatSizeInKb(lf.Length));
-                        litem.SubItems.Add(lf.LastWriteTime.ToString("g"));
-
-                        if (hasRight && rightFiles.TryGetValue(relPath, out var rf))
+                        if (hasLeft && leftFiles.TryGetValue(rf.Name, out var lf))
                         {
-                            if (lf.LastWriteTime == rf.LastWriteTime) litem.ForeColor = Color.Black;        // 1단계: 동일 (검은색)
-                            else if (lf.LastWriteTime > rf.LastWriteTime) litem.ForeColor = Color.Red;      // 2단계: 최신 (빨간색)
-                            else litem.ForeColor = Color.Gray;                                              // 2단계: 과거 (회색)
+                            if (rf.LastWriteTime == lf.LastWriteTime) item.ForeColor = Color.Black;
+                            else if (rf.LastWriteTime > lf.LastWriteTime) item.ForeColor = Color.Red;
+                            else item.ForeColor = Color.Gray;
                         }
                         else
                         {
-                            litem.ForeColor = hasRight ? Color.Purple : Color.Black;                        // 3단계: 단독 파일 (보라색)
+                            item.ForeColor = hasLeft ? Color.Purple : Color.Black;
                         }
-                        lvwLeftDir.Items.Add(litem);
-                    }
-                }
-
-                // 4. 오른쪽 파일 목록 채우기 + 색상 결정
-                if (hasRight)
-                {
-                    foreach (var kvp in rightFiles.OrderBy(f => f.Key))
-                    {
-                        string relPath = kvp.Key;
-                        FileInfo rf = kvp.Value;
-
-                        var ritem = new ListViewItem(relPath);
-                        ritem.SubItems.Add(FormatSizeInKb(rf.Length));
-                        ritem.SubItems.Add(rf.LastWriteTime.ToString("g"));
-
-                        if (hasLeft && leftFiles.TryGetValue(relPath, out var lf))
-                        {
-                            if (rf.LastWriteTime == lf.LastWriteTime) ritem.ForeColor = Color.Black;        // 1단계: 동일 (검은색)
-                            else if (rf.LastWriteTime > lf.LastWriteTime) ritem.ForeColor = Color.Red;      // 2단계: 최신 (빨간색)
-                            else ritem.ForeColor = Color.Gray;                                              // 2단계: 과거 (회색)
-                        }
-                        else
-                        {
-                            ritem.ForeColor = hasLeft ? Color.Purple : Color.Black;                         // 3단계: 단독 파일 (보라색)
-                        }
-                        lvwRightDir.Items.Add(ritem);
+                        lvwRightDir.Items.Add(item);
                     }
                 }
             }
